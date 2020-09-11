@@ -53,6 +53,7 @@
 #![recursion_limit = "256"]
 
 mod code_builder;
+mod config;
 mod encode;
 mod terminate;
 
@@ -61,12 +62,37 @@ use arbitrary::{Arbitrary, Result, Unstructured};
 use std::collections::HashSet;
 use std::str;
 
+pub use config::{Config, DefaultConfig};
+
 /// A pseudo-random WebAssembly module.
 ///
 /// Construct instances of this type with [the `Arbitrary`
 /// trait](https://docs.rs/arbitrary/*/arbitrary/trait.Arbitrary.html).
+///
+/// ## Configuring Generated Modules
+///
+/// This uses the [`DefaultConfig`][crate::DefaultConfig] configuration. If you
+/// want to customize the shape of generated modules, define your own
+/// configuration type, implement the [`Config`][crate::Config] trait for it,
+/// and use [`ConfiguredModule<YourConfigType>`][crate::ConfiguredModule]
+/// instead of plain `Module`.
 #[derive(Debug, Default)]
 pub struct Module {
+    inner: ConfiguredModule<DefaultConfig>,
+}
+
+/// A pseudo-random generated WebAssembly file with custom configuration.
+///
+/// If you don't care about custom configuration, use [`Module`][crate::Module]
+/// instead.
+///
+/// For details on configuring, see the [`Config`][crate::Config] trait.
+#[derive(Debug, Default)]
+pub struct ConfiguredModule<C>
+where
+    C: Config,
+{
+    config: C,
     types: Vec<FuncType>,
     imports: Vec<(String, String, Import)>,
     funcs: Vec<u32>,
@@ -83,7 +109,7 @@ pub struct Module {
 impl Arbitrary for Module {
     fn arbitrary(u: &mut Unstructured) -> Result<Self> {
         let mut module = Module::default();
-        module.build(u, false)?;
+        module.inner.build(u, false)?;
         Ok(module)
     }
 }
@@ -107,7 +133,7 @@ impl MaybeInvalidModule {
 impl Arbitrary for MaybeInvalidModule {
     fn arbitrary(u: &mut Unstructured) -> Result<Self> {
         let mut module = Module::default();
-        module.build(u, true)?;
+        module.inner.build(u, true)?;
         Ok(MaybeInvalidModule { module })
     }
 }
@@ -236,7 +262,10 @@ enum BlockType {
 }
 
 impl BlockType {
-    fn params_results(&self, module: &Module) -> (Vec<ValType>, Vec<ValType>) {
+    fn params_results<C>(&self, module: &ConfiguredModule<C>) -> (Vec<ValType>, Vec<ValType>)
+    where
+        C: Config,
+    {
         match self {
             BlockType::Empty => (vec![], vec![]),
             BlockType::Result(t) => (vec![], vec![*t]),
@@ -460,8 +489,12 @@ struct DataSegment {
     init: Vec<u8>,
 }
 
-impl Module {
+impl<C> ConfiguredModule<C>
+where
+    C: Config,
+{
     fn build(&mut self, u: &mut Unstructured, allow_invalid: bool) -> Result<()> {
+        self.config = C::arbitrary(u)?;
         self.types = u.arbitrary()?;
         self.arbitrary_imports(u)?;
         self.arbitrary_funcs(u)?;
@@ -481,7 +514,7 @@ impl Module {
     }
 
     fn arbitrary_imports(&mut self, u: &mut Unstructured) -> Result<()> {
-        let mut choices: Vec<fn(&mut Unstructured, &mut Module) -> Result<Import>> =
+        let mut choices: Vec<fn(&mut Unstructured, &mut ConfiguredModule<C>) -> Result<Import>> =
             Vec::with_capacity(4);
 
         if !self.types.is_empty() {
@@ -494,8 +527,7 @@ impl Module {
 
         let num_stable_choices = choices.len();
 
-        const MAX_IMPORTS: usize = 100;
-        arbitrary_loop(u, MAX_IMPORTS, |u| {
+        arbitrary_loop(u, self.config.max_imports(), |u| {
             choices.truncate(num_stable_choices);
             if self.memory_imports() == 0 {
                 choices.push(|u, _| Ok(Import::Memory(u.arbitrary()?)));
@@ -566,8 +598,7 @@ impl Module {
             return Ok(());
         }
 
-        const MAX_FUNCS: usize = 1000;
-        arbitrary_loop(u, MAX_FUNCS, |u| {
+        arbitrary_loop(u, self.config.max_funcs(), |u| {
             let max = self.types.len() as u32 - 1;
             let ty = u.int_in_range(0..=max)?;
             self.funcs.push(ty);
@@ -579,8 +610,7 @@ impl Module {
         let mut choices: Vec<Box<dyn Fn(&mut Unstructured, ValType) -> Result<Instruction>>> =
             vec![];
 
-        const MAX_GLOBALS: usize = 100;
-        arbitrary_loop(u, MAX_GLOBALS, |u| {
+        arbitrary_loop(u, self.config.max_globals(), |u| {
             let ty = u.arbitrary::<GlobalType>()?;
 
             choices.clear();
@@ -615,7 +645,7 @@ impl Module {
     }
 
     fn arbitrary_exports(&mut self, u: &mut Unstructured) -> Result<()> {
-        let mut choices: Vec<fn(&mut Unstructured, &mut Module) -> Result<Export>> =
+        let mut choices: Vec<fn(&mut Unstructured, &mut ConfiguredModule<C>) -> Result<Export>> =
             Vec::with_capacity(4);
 
         if !self.funcs.is_empty() {
@@ -647,8 +677,7 @@ impl Module {
         }
 
         let mut export_names = HashSet::new();
-        const MAX_EXPORTS: usize = 100;
-        arbitrary_loop(u, MAX_EXPORTS, |u| {
+        arbitrary_loop(u, self.config.max_exports(), |u| {
             let mut name = limited_string(1_000, u)?;
             while export_names.contains(&name) {
                 name.push_str(&format!("{}", export_names.len()));
@@ -701,8 +730,7 @@ impl Module {
 
         let func_max = self.func_imports() + self.funcs.len() as u32 - 1;
 
-        const MAX_ELEMS: usize = 100;
-        arbitrary_loop(u, MAX_ELEMS, |u| {
+        arbitrary_loop(u, self.config.max_element_segments(), |u| {
             let mut offset_global_choices = vec![];
             let mut global_index = 0;
             for (_, _, imp) in &self.imports {
@@ -721,8 +749,7 @@ impl Module {
             };
 
             let mut init = vec![];
-            const MAX_SEG_ELEMS: usize = 100;
-            arbitrary_loop(u, MAX_SEG_ELEMS, |u| {
+            arbitrary_loop(u, self.config.max_elements(), |u| {
                 let func_idx = u.int_in_range(0..=func_max)?;
                 init.push(func_idx);
                 Ok(())
@@ -748,7 +775,7 @@ impl Module {
         &self,
         u: &mut Unstructured,
         ty: &FuncType,
-        allocs: &mut CodeBuilderAllocations,
+        allocs: &mut CodeBuilderAllocations<C>,
         allow_invalid: bool,
     ) -> Result<Code> {
         let locals = self.arbitrary_locals(u)?;
@@ -776,8 +803,7 @@ impl Module {
 
         let mut choices: Vec<Box<dyn Fn(&mut Unstructured) -> Result<Instruction>>> = vec![];
 
-        const MAX_DATA: usize = 100;
-        arbitrary_loop(u, MAX_DATA, |u| {
+        arbitrary_loop(u, self.config.max_data_segments(), |u| {
             if choices.is_empty() {
                 choices.push(Box::new(|u| Ok(Instruction::I32Const(u.arbitrary()?))));
 
