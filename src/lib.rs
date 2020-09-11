@@ -62,7 +62,7 @@ use arbitrary::{Arbitrary, Result, Unstructured};
 use std::collections::HashSet;
 use std::str;
 
-pub use config::{Config, DefaultConfig};
+pub use config::{Config, DefaultConfig, SwarmConfig};
 
 /// A pseudo-random WebAssembly module.
 ///
