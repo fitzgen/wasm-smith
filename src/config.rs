@@ -92,6 +92,7 @@ pub struct SwarmConfig {
     max_elements: usize,
     max_data_segments: usize,
     max_instructions: usize,
+    max_memories: u32,
 }
 
 impl Arbitrary for SwarmConfig {
@@ -106,6 +107,7 @@ impl Arbitrary for SwarmConfig {
             max_elements: u.int_in_range(0..=MAX_MAXIMUM)?,
             max_data_segments: u.int_in_range(0..=MAX_MAXIMUM)?,
             max_instructions: u.int_in_range(0..=MAX_MAXIMUM)?,
+            max_memories: u.int_in_range(0..=(MAX_MAXIMUM as u32))?,
         })
     }
 }
@@ -141,5 +143,9 @@ impl Config for SwarmConfig {
 
     fn max_instructions(&self) -> usize {
         self.max_instructions
+    }
+
+    fn max_memories(&self) -> u32 {
+        self.max_memories
     }
 }
