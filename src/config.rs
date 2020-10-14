@@ -68,6 +68,35 @@ pub trait Config: Arbitrary + Default {
     fn max_memories(&self) -> u32 {
         1
     }
+
+    /// Control the probability of generating memory offsets that are in bounds
+    /// vs. potentially out of bounds.
+    ///
+    /// Return a tuple `(a, b, c)` where
+    ///
+    /// * `a / (a+b+c)` is the probability of generating a memory offset within
+    ///   `0..memory.min_size`, i.e. an offset that is definitely in bounds of a
+    ///   non-empty memory. (Note that if a memory is zero-sized, however, no
+    ///   offset will ever be in bounds.)
+    ///
+    /// * `b / (a+b+c)` is the probability of generating a memory offset within
+    ///   `memory.min_size..memory.max_size`, i.e. an offset that is possibly in
+    ///   bounds if the memory has been grown.
+    ///
+    /// * `c / (a+b+c)` is the probability of generating a memory offset within
+    ///   the range `memory.max_size..`, i.e. an offset that is definitely out
+    ///   of bounds.
+    ///
+    /// At least one of `a`, `b`, and `c` must be non-zero.
+    ///
+    /// If you want to always generate memory offsets that are definitely in
+    /// bounds of a non-zero-sized memory, for example, you could return `(1, 0,
+    /// 0)`.
+    ///
+    /// By default, returns `(75, 24, 1)`.
+    fn memory_offset_choices(&self) -> (u32, u32, u32) {
+        (75, 24, 1)
+    }
 }
 
 /// The default configuration.
